@@ -4,9 +4,35 @@ Bot Discord pentru Poliția Română - Legacy of CLT.
 
 ## Funcții
 
-- Pe serverul Poliției, în canalul de demisii, dacă un membru scrie `demisia` sau `demisie`, botul creează o cerere cu 2 butoane:
+- Pe serverul Poliției, în canalul de demisii, dacă un membru trimite modelul corect, botul creează o cerere cu 2 butoane:
   - `Acceptă Demisia`
   - `Refuză Demisia`
+- Format pentru cerere:
+
+```text
+Nume: numele tău
+Ore: numărul de ore
+Motiv: motivul demisiei
+```
+
+- Exemplu:
+
+```text
+Nume: Jmarok
+Ore: 120
+Motiv: Nu mai am timp să activez în facțiune.
+```
+
+- Botul acceptă și varianta cu `demisia` / `demisie` înainte de model:
+
+```text
+demisia
+Nume: Jmarok
+Ore: 120
+Motiv: Nu mai am timp să activez în facțiune.
+```
+
+- `Nume`, `Ore` și `Motiv` apar în cererea inițială, în loguri și în anunțul de pe serverul principal.
 - La acceptare:
   - marchează cererea ca acceptată;
   - calculează câte zile a stat membrul în facțiune, dacă data intrării este setată;
@@ -14,7 +40,7 @@ Bot Discord pentru Poliția Română - Legacy of CLT.
   - trimite anunț pe serverul principal FiveM;
   - NU elimină roluri automat. Rolurile se elimină manual.
 - La refuz:
-  - cere motivul printr-un formular;
+  - cere motivul refuzului printr-un formular;
   - postează mesajul public cu motivul;
   - trimite log pe serverul Poliției.
 - Comenzi staff:
