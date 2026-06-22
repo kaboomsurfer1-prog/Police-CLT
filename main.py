@@ -54,6 +54,7 @@ BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 DB_PATH = os.getenv("DB_PATH", "/data/legacy_police.db")
 TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Bucharest")
 DELETE_TRIGGER_MESSAGE = os.getenv("DELETE_TRIGGER_MESSAGE", "false").lower() in {"1", "true", "yes", "da"}
+BOT_VERSION = "1.0.4-data-intrare-obligatorie"
 
 try:
     LOCAL_TZ = ZoneInfo(TIMEZONE_NAME)
@@ -314,7 +315,17 @@ def format_join_date(join_date_iso: Optional[str]) -> str:
         d = date.fromisoformat(join_date_iso)
         return d.strftime("%d/%m/%Y")
     except ValueError:
-        return join_date_iso
+        return "Invalidă"
+
+
+def is_valid_join_date(join_date_iso: Optional[str]) -> bool:
+    if not join_date_iso:
+        return False
+    try:
+        date.fromisoformat(join_date_iso)
+        return True
+    except ValueError:
+        return False
 
 
 def is_staff(member: discord.abc.User) -> bool:
@@ -559,6 +570,14 @@ class DemisieDecisionView(discord.ui.View):
 
         join_date_iso = await db.get_join_date(int(row["user_id"])) or row.get("join_date")
         days = calculate_days(join_date_iso)
+        if not is_valid_join_date(join_date_iso) or days is None:
+            await interaction.followup.send(
+                "❌ Nu pot accepta demisia deoarece data intrării membrului nu este setată corect.\n"
+                "Folosește mai întâi: `/setintrare @membru DD/MM/YYYY` și apoi apasă din nou pe `Acceptă Demisia`.",
+                ephemeral=True,
+            )
+            return
+
         updated = await db.decide(
             int(row["message_id"]),
             status="ACCEPTED",
@@ -702,6 +721,7 @@ bot = LegacyPoliceBot(command_prefix=BOT_PREFIX, intents=intents)
 @bot.event
 async def on_ready() -> None:
     log.info("Bot online ca %s | Servere: %s", bot.user, len(bot.guilds))
+    log.info("Versiune bot: %s", BOT_VERSION)
     log.info("DB_PATH: %s", DB_PATH)
 
 
@@ -762,16 +782,17 @@ async def on_message(message: discord.Message) -> None:
         return
 
     join_date_iso = await db.get_join_date(message.author.id)
-    if not join_date_iso:
+    days = calculate_days(join_date_iso)
+    if not is_valid_join_date(join_date_iso) or days is None:
         await message.reply(
-            "❌ Nu poți depune demisia deoarece **data intrării tale nu este setată**.\n"
+            "❌ Nu poți depune demisia deoarece **data intrării tale nu este setată corect**.\n"
             "Roagă conducerea să folosească mai întâi comanda:\n"
-            "`/setintrare @membru DD/MM/YYYY`",
+            "`/setintrare @membru DD/MM/YYYY`\n\n"
+            "După ce data este setată, trimite din nou demisia.",
             mention_author=True,
         )
         return
 
-    days = calculate_days(join_date_iso)
     request_id = f"DMS-{message.author.id}-{int(datetime.now(timezone.utc).timestamp())}"
 
     embed = build_pending_embed(message.author, request_id, join_date_iso, days, request_reason, request_name, request_hours)
