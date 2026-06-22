@@ -33,10 +33,10 @@ Motiv: Nu mai am timp să activez în facțiune.
 ```
 
 - `Nume`, `Ore` și `Motiv` apar în cererea inițială, în loguri și în anunțul de pe serverul principal.
-- Demisia poate fi depusă doar dacă data intrării este setată pentru membru. Dacă nu este setată, botul respinge cererea și cere conducerii să folosească `/setintrare`.
+- Demisia poate fi depusă doar dacă data și ora intrării sunt setate pentru membru. Dacă nu sunt setate, botul respinge cererea și cere conducerii să folosească `/setintrare`.
 - La acceptare:
   - marchează cererea ca acceptată;
-  - calculează câte zile a stat membrul în facțiune;
+  - calculează exact cât timp a stat membrul în facțiune, pe zile, ore și minute;
   - trimite log pe serverul Poliției;
   - trimite anunț pe serverul principal FiveM;
   - NU elimină roluri automat. Rolurile se elimină manual.
@@ -45,8 +45,8 @@ Motiv: Nu mai am timp să activez în facțiune.
   - postează mesajul public cu motivul;
   - trimite log pe serverul Poliției.
 - Comenzi staff:
-  - `/setintrare membru data` — setează data intrării în facțiune.
-  - `/intrare membru` — verifică data intrării și zilele.
+  - `/setintrare membru data ora` — setează data și ora intrării în facțiune.
+  - `/intrare membru` — verifică data/ora intrării și timpul exact în facțiune.
   - `/demisii limit` — arată ultimele cereri.
 
 ## Railway
@@ -75,23 +75,34 @@ Botul are nevoie de:
 - Use Slash Commands
 - Manage Messages doar dacă setezi `DELETE_TRIGGER_MESSAGE=true`
 
-## Format data intrării
+## Format data și ora intrării
 
-Acceptă:
+Comanda se folosește așa:
+
+```text
+/setintrare @membru 22/06/2026 20:30
+```
+
+Format dată acceptat:
 
 - `YYYY-MM-DD`, exemplu `2026-06-22`
 - `DD/MM/YYYY`, exemplu `22/06/2026`
 - `DD-MM-YYYY`, exemplu `22-06-2026`
 - `DD.MM.YYYY`, exemplu `22.06.2026`
 
+Format oră acceptat:
+
+- `HH:MM`, exemplu `20:30`
+- `HH`, exemplu `20` pentru `20:00`
+
 ## Versiune
 
-Versiune curentă: `1.0.4-data-intrare-obligatorie`
+Versiune curentă: `1.0.5-data-ora-intrare`
 
 În Railway logs trebuie să apară:
 
 ```text
-Versiune bot: 1.0.4-data-intrare-obligatorie
+Versiune bot: 1.0.5-data-ora-intrare
 ```
 
 Dacă nu apare această versiune în logs, Railway rulează încă un `main.py` vechi.
