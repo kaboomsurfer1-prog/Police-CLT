@@ -762,6 +762,15 @@ async def on_message(message: discord.Message) -> None:
         return
 
     join_date_iso = await db.get_join_date(message.author.id)
+    if not join_date_iso:
+        await message.reply(
+            "❌ Nu poți depune demisia deoarece **data intrării tale nu este setată**.\n"
+            "Roagă conducerea să folosească mai întâi comanda:\n"
+            "`/setintrare @membru DD/MM/YYYY`",
+            mention_author=True,
+        )
+        return
+
     days = calculate_days(join_date_iso)
     request_id = f"DMS-{message.author.id}-{int(datetime.now(timezone.utc).timestamp())}"
 
