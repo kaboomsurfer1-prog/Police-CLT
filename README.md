@@ -33,9 +33,10 @@ Motiv: Nu mai am timp să activez în facțiune.
 ```
 
 - `Nume`, `Ore` și `Motiv` apar în cererea inițială, în loguri și în anunțul de pe serverul principal.
+- Demisia poate fi depusă doar dacă data intrării este setată pentru membru. Dacă nu este setată, botul respinge cererea și cere conducerii să folosească `/setintrare`.
 - La acceptare:
   - marchează cererea ca acceptată;
-  - calculează câte zile a stat membrul în facțiune, dacă data intrării este setată;
+  - calculează câte zile a stat membrul în facțiune;
   - trimite log pe serverul Poliției;
   - trimite anunț pe serverul principal FiveM;
   - NU elimină roluri automat. Rolurile se elimină manual.
