@@ -104,6 +104,7 @@ class Database:
                     decided_at TEXT,
                     decided_by TEXT,
                     reason TEXT,
+                    request_reason TEXT,
                     join_date TEXT,
                     days INTEGER
                 )
@@ -111,6 +112,10 @@ class Database:
             )
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resignations_user_status ON resignations(user_id, status)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resignations_message ON resignations(message_id)")
+
+            columns = {row[1] for row in self.conn.execute("PRAGMA table_info(resignations)").fetchall()}
+            if "request_reason" not in columns:
+                self.conn.execute("ALTER TABLE resignations ADD COLUMN request_reason TEXT")
 
     async def set_join_date(self, user_id: int, join_date: date, set_by: int) -> None:
         async with self.lock:
@@ -143,14 +148,15 @@ class Database:
         message_id: int,
         join_date_iso: Optional[str],
         days: Optional[int],
+        request_reason: str,
     ) -> None:
         async with self.lock:
             with self.conn:
                 self.conn.execute(
                     """
                     INSERT INTO resignations(
-                        id, user_id, channel_id, message_id, status, created_at, join_date, days
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        id, user_id, channel_id, message_id, status, created_at, join_date, days, request_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         request_id,
@@ -161,6 +167,7 @@ class Database:
                         now_iso(),
                         join_date_iso,
                         days,
+                        request_reason,
                     ),
                 )
 
@@ -337,7 +344,7 @@ async def send_to_channel(bot: commands.Bot, channel_id: int, *, content: Option
 # EMBED-URI
 # =========================
 
-def build_pending_embed(member: discord.Member, request_id: str, join_date_iso: Optional[str], days: Optional[int]) -> discord.Embed:
+def build_pending_embed(member: discord.Member, request_id: str, join_date_iso: Optional[str], days: Optional[int], request_reason: str) -> discord.Embed:
     embed = discord.Embed(
         title="📋 Cerere de Demisie",
         description=(
@@ -350,6 +357,7 @@ def build_pending_embed(member: discord.Member, request_id: str, join_date_iso: 
     embed.add_field(name="👤 Membru", value=f"{member.mention}\n`{member.id}`", inline=True)
     embed.add_field(name="📅 Data intrării", value=format_join_date(join_date_iso), inline=True)
     embed.add_field(name="⏳ Timp în facțiune", value=format_days(days), inline=True)
+    embed.add_field(name="📝 Motivul demisiei", value=request_reason[:1024], inline=False)
     embed.add_field(name="📌 Status", value="🟡 În așteptare", inline=False)
     embed.set_footer(text=f"ID cerere: {request_id}")
     return embed
@@ -380,6 +388,8 @@ def build_decision_embed(row: dict) -> discord.Embed:
     embed.add_field(name="📅 Data intrării", value=format_join_date(row.get("join_date")), inline=True)
     embed.add_field(name="⏳ Timp în facțiune", value=format_days(row.get("days")), inline=True)
     embed.add_field(name="📌 Status", value=status_line, inline=False)
+    if row.get("request_reason"):
+        embed.add_field(name="📝 Motivul demisiei", value=row["request_reason"][:1024], inline=False)
 
     if row.get("decided_by"):
         embed.add_field(name="👮 Decizie luată de", value=user_mention(row["decided_by"]), inline=True)
@@ -387,7 +397,7 @@ def build_decision_embed(row: dict) -> discord.Embed:
     if decided_ts:
         embed.add_field(name="🕒 Data deciziei", value=f"<t:{decided_ts}:F>", inline=True)
     if status == "REFUSED" and row.get("reason"):
-        embed.add_field(name="📝 Motiv", value=row["reason"][:1024], inline=False)
+        embed.add_field(name="📝 Motivul refuzului", value=row["reason"][:1024], inline=False)
 
     embed.add_field(name="⚠️ Roluri", value="Rolurile se elimină manual de către conducere.", inline=False)
     embed.set_footer(text=f"ID cerere: {row['id']}")
@@ -406,6 +416,8 @@ def build_main_accepted_embed(row: dict) -> discord.Embed:
     )
     embed.add_field(name="👮 Acceptată de", value=user_mention(row.get("decided_by", "0")), inline=True)
     embed.add_field(name="📅 Data intrării", value=format_join_date(row.get("join_date")), inline=True)
+    if row.get("request_reason"):
+        embed.add_field(name="📝 Motivul demisiei", value=row["request_reason"][:1024], inline=False)
     embed.set_footer(text="Legacy of CLT • Poliția Română")
     return embed
 
@@ -418,7 +430,9 @@ def build_refused_public_embed(row: dict) -> discord.Embed:
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="👮 Refuzată de", value=user_mention(row.get("decided_by", "0")), inline=True)
-    embed.add_field(name="📝 Motiv", value=(row.get("reason") or "Nespecificat")[:1024], inline=False)
+    if row.get("request_reason"):
+        embed.add_field(name="📝 Motivul demisiei", value=row["request_reason"][:1024], inline=False)
+    embed.add_field(name="📝 Motivul refuzului", value=(row.get("reason") or "Nespecificat")[:1024], inline=False)
     embed.set_footer(text="Legacy of CLT • Poliția Română")
     return embed
 
@@ -638,8 +652,21 @@ async def on_message(message: discord.Message) -> None:
     if message.channel.id != DEMISIE_CHANNEL_ID:
         return
 
-    content = message.content.strip().lower()
-    if content not in {"demisia", "demisie"}:
+    match = re.match(r"^\s*(demisia|demisie)(?:\s+(.+))?\s*$", message.content, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return
+
+    request_reason = (match.group(2) or "").strip()
+    if len(request_reason) < 3:
+        await message.reply(
+            "⚠️ Trebuie să scrii și motivul demisiei.\n"
+            "Format corect: `demisia motivul tău`\n"
+            "Exemplu: `demisia Nu mai am timp să activez în facțiune.`",
+            mention_author=True,
+        )
+        return
+    if len(request_reason) > 1000:
+        await message.reply("⚠️ Motivul demisiei este prea lung. Maxim 1000 de caractere.", mention_author=True)
         return
 
     if not isinstance(message.author, discord.Member):
@@ -657,7 +684,7 @@ async def on_message(message: discord.Message) -> None:
     days = calculate_days(join_date_iso)
     request_id = f"DMS-{message.author.id}-{int(datetime.now(timezone.utc).timestamp())}"
 
-    embed = build_pending_embed(message.author, request_id, join_date_iso, days)
+    embed = build_pending_embed(message.author, request_id, join_date_iso, days, request_reason)
     sent = await message.channel.send(embed=embed, view=DemisieDecisionView(bot))
 
     await db.create_resignation(
@@ -667,6 +694,7 @@ async def on_message(message: discord.Message) -> None:
         message_id=sent.id,
         join_date_iso=join_date_iso,
         days=days,
+        request_reason=request_reason,
     )
 
     if DELETE_TRIGGER_MESSAGE:
