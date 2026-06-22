@@ -83,3 +83,15 @@ Acceptă:
 - `DD/MM/YYYY`, exemplu `22/06/2026`
 - `DD-MM-YYYY`, exemplu `22-06-2026`
 - `DD.MM.YYYY`, exemplu `22.06.2026`
+
+## Versiune
+
+Versiune curentă: `1.0.4-data-intrare-obligatorie`
+
+În Railway logs trebuie să apară:
+
+```text
+Versiune bot: 1.0.4-data-intrare-obligatorie
+```
+
+Dacă nu apare această versiune în logs, Railway rulează încă un `main.py` vechi.
