@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, time
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -54,7 +54,7 @@ BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 DB_PATH = os.getenv("DB_PATH", "/data/legacy_police.db")
 TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Bucharest")
 DELETE_TRIGGER_MESSAGE = os.getenv("DELETE_TRIGGER_MESSAGE", "false").lower() in {"1", "true", "yes", "da"}
-BOT_VERSION = "1.0.4-data-intrare-obligatorie"
+BOT_VERSION = "1.0.5-data-ora-intrare"
 
 try:
     LOCAL_TZ = ZoneInfo(TIMEZONE_NAME)
@@ -124,7 +124,7 @@ class Database:
             if "request_hours" not in columns:
                 self.conn.execute("ALTER TABLE resignations ADD COLUMN request_hours TEXT")
 
-    async def set_join_date(self, user_id: int, join_date: date, set_by: int) -> None:
+    async def set_join_date(self, user_id: int, join_dt: datetime, set_by: int) -> None:
         async with self.lock:
             with self.conn:
                 self.conn.execute(
@@ -136,7 +136,7 @@ class Database:
                         set_by=excluded.set_by,
                         set_at=excluded.set_at
                     """,
-                    (str(user_id), join_date.isoformat(), str(set_by), now_iso()),
+                    (str(user_id), join_dt.astimezone(LOCAL_TZ).isoformat(), str(set_by), now_iso()),
                 )
 
     async def get_join_date(self, user_id: int) -> Optional[str]:
@@ -286,18 +286,60 @@ def parse_join_date(value: str) -> date:
             return datetime.strptime(value, fmt).date()
         except ValueError:
             pass
-    raise ValueError("Format invalid. Folosește YYYY-MM-DD sau DD/MM/YYYY.")
+    raise ValueError("Format dată invalid. Folosește YYYY-MM-DD sau DD/MM/YYYY.")
+
+
+def parse_join_time(value: str) -> time:
+    value = value.strip().replace(".", ":")
+    formats = ("%H:%M", "%H")
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt).time()
+        except ValueError:
+            pass
+    raise ValueError("Format oră invalid. Folosește HH:MM, exemplu 20:30.")
+
+
+def parse_join_datetime(data: str, ora: str) -> datetime:
+    d = parse_join_date(data)
+    t = parse_join_time(ora)
+    join_dt = datetime.combine(d, t, tzinfo=LOCAL_TZ)
+    now_local = datetime.now(LOCAL_TZ)
+    if join_dt > now_local:
+        raise ValueError("Data și ora intrării nu pot fi în viitor.")
+    return join_dt
+
+
+def parse_stored_join_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        try:
+            d = date.fromisoformat(value)
+            dt = datetime.combine(d, time(0, 0), tzinfo=LOCAL_TZ)
+        except ValueError:
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=LOCAL_TZ)
+    return dt.astimezone(LOCAL_TZ)
+
+
+def calculate_duration_seconds(join_date_iso: Optional[str]) -> Optional[int]:
+    join_dt = parse_stored_join_datetime(join_date_iso)
+    if not join_dt:
+        return None
+    seconds = int((datetime.now(LOCAL_TZ) - join_dt).total_seconds())
+    return max(0, seconds)
 
 
 def calculate_days(join_date_iso: Optional[str]) -> Optional[int]:
-    if not join_date_iso:
+    seconds = calculate_duration_seconds(join_date_iso)
+    if seconds is None:
         return None
-    try:
-        join_date = date.fromisoformat(join_date_iso)
-    except ValueError:
-        return None
-    today = datetime.now(LOCAL_TZ).date()
-    return max(0, (today - join_date).days)
+    return seconds // 86400
 
 
 def format_days(days: Optional[int]) -> str:
@@ -308,24 +350,46 @@ def format_days(days: Optional[int]) -> str:
     return f"{days} zile"
 
 
+def format_duration_from_join(join_date_iso: Optional[str]) -> str:
+    seconds = calculate_duration_seconds(join_date_iso)
+    if seconds is None:
+        return "Necunoscut"
+
+    total_minutes = seconds // 60
+    days = total_minutes // (24 * 60)
+    hours = (total_minutes % (24 * 60)) // 60
+    minutes = total_minutes % 60
+
+    parts: list[str] = []
+    if days == 1:
+        parts.append("1 zi")
+    elif days > 1:
+        parts.append(f"{days} zile")
+
+    if hours == 1:
+        parts.append("1 oră")
+    elif hours > 1:
+        parts.append(f"{hours} ore")
+
+    if minutes == 1:
+        parts.append("1 minut")
+    elif minutes > 1:
+        parts.append(f"{minutes} minute")
+
+    if not parts:
+        return "Sub 1 minut"
+    return ", ".join(parts)
+
+
 def format_join_date(join_date_iso: Optional[str]) -> str:
-    if not join_date_iso:
-        return "Nesetată"
-    try:
-        d = date.fromisoformat(join_date_iso)
-        return d.strftime("%d/%m/%Y")
-    except ValueError:
-        return "Invalidă"
+    join_dt = parse_stored_join_datetime(join_date_iso)
+    if not join_dt:
+        return "Nesetată" if not join_date_iso else "Invalidă"
+    return join_dt.strftime("%d/%m/%Y %H:%M")
 
 
 def is_valid_join_date(join_date_iso: Optional[str]) -> bool:
-    if not join_date_iso:
-        return False
-    try:
-        date.fromisoformat(join_date_iso)
-        return True
-    except ValueError:
-        return False
+    return parse_stored_join_datetime(join_date_iso) is not None
 
 
 def is_staff(member: discord.abc.User) -> bool:
@@ -420,7 +484,7 @@ def build_pending_embed(member: discord.Member, request_id: str, join_date_iso: 
     embed.add_field(name="🪪 Nume", value=request_name[:256], inline=True)
     embed.add_field(name="⏱️ Ore", value=request_hours[:256], inline=True)
     embed.add_field(name="📅 Data intrării", value=format_join_date(join_date_iso), inline=True)
-    embed.add_field(name="⏳ Timp în facțiune", value=format_days(days), inline=True)
+    embed.add_field(name="⏳ Timp în facțiune", value=format_duration_from_join(join_date_iso), inline=True)
     embed.add_field(name="📝 Motiv", value=request_reason[:1024], inline=False)
     embed.add_field(name="📌 Status", value="🟡 În așteptare", inline=False)
     embed.set_footer(text=f"ID cerere: {request_id}")
@@ -454,7 +518,7 @@ def build_decision_embed(row: dict) -> discord.Embed:
     if row.get("request_hours"):
         embed.add_field(name="⏱️ Ore", value=row["request_hours"][:256], inline=True)
     embed.add_field(name="📅 Data intrării", value=format_join_date(row.get("join_date")), inline=True)
-    embed.add_field(name="⏳ Timp în facțiune", value=format_days(row.get("days")), inline=True)
+    embed.add_field(name="⏳ Timp în facțiune", value=format_duration_from_join(row.get("join_date")), inline=True)
     embed.add_field(name="📌 Status", value=status_line, inline=False)
     if row.get("request_reason"):
         embed.add_field(name="📝 Motiv", value=row["request_reason"][:1024], inline=False)
@@ -477,7 +541,7 @@ def build_main_accepted_embed(row: dict) -> discord.Embed:
         title="📢 Demisie Acceptată",
         description=(
             f"{user_mention(row['user_id'])} a părăsit facțiunea **Poliția Română** "
-            f"după **{format_days(row.get('days')).lower()}**."
+            f"după **{format_duration_from_join(row.get('join_date')).lower()}**."
         ),
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -573,7 +637,7 @@ class DemisieDecisionView(discord.ui.View):
         if not is_valid_join_date(join_date_iso) or days is None:
             await interaction.followup.send(
                 "❌ Nu pot accepta demisia deoarece data intrării membrului nu este setată corect.\n"
-                "Folosește mai întâi: `/setintrare @membru DD/MM/YYYY` și apoi apasă din nou pe `Acceptă Demisia`.",
+                "Folosește mai întâi: `/setintrare @membru DD/MM/YYYY HH:MM` și apoi apasă din nou pe `Acceptă Demisia`.",
                 ephemeral=True,
             )
             return
@@ -787,7 +851,7 @@ async def on_message(message: discord.Message) -> None:
         await message.reply(
             "❌ Nu poți depune demisia deoarece **data intrării tale nu este setată corect**.\n"
             "Roagă conducerea să folosească mai întâi comanda:\n"
-            "`/setintrare @membru DD/MM/YYYY`\n\n"
+            "`/setintrare @membru DD/MM/YYYY HH:MM`\n\n"
             "După ce data este setată, trimite din nou demisia.",
             mention_author=True,
         )
@@ -824,24 +888,26 @@ async def on_message(message: discord.Message) -> None:
 police_guild_obj = discord.Object(id=POLICE_GUILD_ID)
 
 
-@bot.tree.command(name="setintrare", description="Setează data intrării unui membru în Poliția Română.", guild=police_guild_obj)
+@bot.tree.command(name="setintrare", description="Setează data și ora intrării unui membru în Poliția Română.", guild=police_guild_obj)
 @app_commands.describe(
     membru="Membrul pentru care setezi data intrării.",
     data="Data intrării: YYYY-MM-DD sau DD/MM/YYYY.",
+    ora="Ora intrării: HH:MM, exemplu 20:30.",
 )
-async def setintrare(interaction: discord.Interaction, membru: discord.Member, data: str):
+async def setintrare(interaction: discord.Interaction, membru: discord.Member, data: str, ora: str):
     if not is_staff(interaction.user):
         await interaction.response.send_message("❌ Nu ai permisiune să folosești această comandă.", ephemeral=True)
         return
     try:
-        parsed = parse_join_date(data)
+        parsed = parse_join_datetime(data, ora)
     except ValueError as exc:
         await interaction.response.send_message(f"❌ {exc}", ephemeral=True)
         return
 
     await db.set_join_date(membru.id, parsed, interaction.user.id)
     await interaction.response.send_message(
-        f"✅ Data intrării pentru {membru.mention} a fost setată la **{parsed.strftime('%d/%m/%Y')}**.",
+        f"✅ Data și ora intrării pentru {membru.mention} au fost setate la **{parsed.strftime('%d/%m/%Y %H:%M')}**.\n"
+        f"⏳ Timp în facțiune acum: **{format_duration_from_join(parsed.isoformat())}**.",
         ephemeral=True,
     )
 
@@ -854,9 +920,8 @@ async def intrare(interaction: discord.Interaction, membru: discord.Member):
         return
 
     join_date_iso = await db.get_join_date(membru.id)
-    days = calculate_days(join_date_iso)
     await interaction.response.send_message(
-        f"👤 {membru.mention}\n📅 Data intrării: **{format_join_date(join_date_iso)}**\n⏳ Timp în facțiune: **{format_days(days)}**",
+        f"👤 {membru.mention}\n📅 Data intrării: **{format_join_date(join_date_iso)}**\n⏳ Timp în facțiune: **{format_duration_from_join(join_date_iso)}**",
         ephemeral=True,
     )
 
